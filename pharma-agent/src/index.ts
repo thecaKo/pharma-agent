@@ -1,0 +1,78 @@
+import fs from "node:fs";
+import { emitAgentEvent } from "./api/event-sink";
+import { getCachedImportConfig, refreshImportConfigFromApi } from "./api/remote-sync-config";
+import { handleCommand } from "./commands";
+import { applyEnvToConfig } from "./config/env-merge";
+import { isRegistered, loadConfig } from "./config/local-config";
+import { connectToPanel, startCommandPolling } from "./panel/client";
+import { startSetupServer } from "./setup/server";
+
+configureFirebirdLock();
+
+process.on("uncaughtException", (error) => {
+  console.error("Erro nao tratado no agente:", error);
+});
+
+process.on("unhandledRejection", (error) => {
+  console.error("Promise rejeitada sem tratamento no agente:", error);
+});
+
+const SETUP_PORT = Number(process.env.PHARMA_AGENT_SETUP_PORT ?? 3333);
+const SETUP_HOST = process.env.PHARMA_AGENT_SETUP_HOST ?? "127.0.0.1";
+
+async function main(): Promise<void> {
+  const raw = await loadConfig();
+  const config = applyEnvToConfig(raw);
+
+  startSetupServer({ port: SETUP_PORT, host: SETUP_HOST });
+
+  if (isRegistered(config)) {
+    await emitAgentEvent(config, "agent.started", {});
+    void refreshImportConfigFromApi(config);
+    connectToPanel(config);
+    startCommandPolling(config);
+
+    const intervalMs = (config.syncIntervalSeconds ?? 15) * 1000;
+    setInterval(() => {
+      void runScheduledSync(config);
+    }, intervalMs);
+    return;
+  }
+
+  console.log("Agente ainda nao registrado. Abra o setup local para configurar token e painel.");
+}
+
+async function runScheduledSync(config: Parameters<typeof emitAgentEvent>[0]): Promise<void> {
+  const ic = getCachedImportConfig();
+  if (!ic) {
+    return;
+  }
+  const id = `auto-sync-${Date.now()}`;
+  try {
+    const r = await handleCommand({ id, type: "products:sync", payload: ic });
+    await emitAgentEvent(config, r.success ? "sync.finished" : "sync.failed", {
+      commandId: id,
+      error: r.error
+    });
+  } catch (error) {
+    await emitAgentEvent(config, "sync.failed", {
+      commandId: id,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+
+function configureFirebirdLock(): void {
+  if (process.env.FIREBIRD_LOCK || process.platform === "win32") {
+    return;
+  }
+
+  const lockDir = "/tmp/pharma-firebird-lock";
+  fs.mkdirSync(lockDir, { recursive: true });
+  process.env.FIREBIRD_LOCK = lockDir;
+}

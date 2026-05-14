@@ -1,0 +1,15 @@
+services:
+  firebird:
+    image: firebirdsql/firebird:5
+    container_name: pharmaconnector-firebird-test
+    restart: unless-stopped
+    environment:
+      FIREBIRD_ROOT_PASSWORD: masterkey
+      FIREBIRD_DATABASE: pharma_test.fdb
+      FIREBIRD_DATABASE_DEFAULT_CHARSET: UTF8
+      TZ: America/Sao_Paulo
+    ports:
+      - "3050:3050"
+    volumes:
+      - ./data:/var/lib/firebird/data
+      - ./init:/docker-entrypoint-initdb.d:ro

@@ -1,0 +1,131 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model AgentToken {
+  id          String    @id @default(cuid())
+  token       String    @unique
+  status      String    @default("pending")
+  createdAt   DateTime  @default(now())
+  connectedAt DateTime?
+  agentId     String?
+  agent       Agent?
+}
+
+model Agent {
+  id         String          @id @default(cuid())
+  name       String
+  tokenId    String          @unique
+  token      AgentToken      @relation(fields: [tokenId], references: [id])
+  status     String          @default("offline")
+  lastSeenAt DateTime?
+  createdAt  DateTime        @default(now())
+  database   DatabaseConfig?
+  mapping    ProductMapping?
+  syncConfig SyncConfig?
+  imports    ImportJob[]
+  products   ImportedProduct[]
+  events     AgentEvent[]
+}
+
+model DatabaseConfig {
+  id              String   @id @default(cuid())
+  agentId         String   @unique
+  agent           Agent    @relation(fields: [agentId], references: [id])
+  driver          String
+  host            String
+  port            Int
+  database        String
+  user            String
+  password        String
+  lastTestStatus  String?
+  lastTestMessage String?
+  updatedAt       DateTime @updatedAt
+}
+
+model ProductMapping {
+  id         String   @id @default(cuid())
+  agentId    String   @unique
+  agent      Agent    @relation(fields: [agentId], references: [id])
+  tableName  String
+  idField    String?
+  nameField  String
+  priceField String?
+  stockField String?
+  imageField String?
+  updatedAt  DateTime @updatedAt
+}
+
+model SyncConfig {
+  id              String    @id @default(cuid())
+  agentId         String    @unique
+  agent           Agent     @relation(fields: [agentId], references: [id])
+  enabled         Boolean   @default(true)
+  intervalSeconds Int       @default(15)
+  lastSyncAt      DateTime?
+  lastStatus      String?
+  lastMessage     String?
+  lastTotalRows   Int?
+  lastCreated     Int?
+  lastUpdated     Int?
+  lastRemoved     Int?
+  lastUnchanged   Int?
+  lastDurationMs  Int?
+  consecutiveFailures Int @default(0)
+  lastLogs        String?
+  updatedAt       DateTime  @updatedAt
+}
+
+model ImportJob {
+  id          String   @id @default(cuid())
+  agentId     String
+  agent       Agent    @relation(fields: [agentId], references: [id])
+  status      String
+  totalRows   Int?
+  successRows Int?
+  failedRows  Int?
+  logs        String?
+  createdAt   DateTime @default(now())
+  products    ImportedProduct[]
+}
+
+model ImportedProduct {
+  id          String    @id @default(cuid())
+  importJobId String?
+  importJob   ImportJob? @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+  agentId     String
+  agent       Agent     @relation(fields: [agentId], references: [id])
+  externalId  String?
+  active      Boolean   @default(true)
+  lastSeenAt  DateTime?
+  name        String
+  price       Float?
+  stock       Float?
+  image       String?
+  rawJson     String
+  updatedAt   DateTime  @default(now()) @updatedAt
+  createdAt   DateTime  @default(now())
+
+  @@index([agentId])
+  @@index([importJobId])
+  @@unique([agentId, externalId])
+}
+
+model AgentEvent {
+  id           String   @id @default(cuid())
+  agentId      String
+  agent        Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  type         String
+  level        String   @default("info")
+  message      String
+  metadataJson String?
+  createdAt    DateTime @default(now())
+
+  @@index([agentId, createdAt])
+  @@index([type])
+}

@@ -1,0 +1,16 @@
+[Unit]
+Description=Pharma Connector Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/node /opt/pharma-connector-agent/dist/index.js
+WorkingDirectory=/opt/pharma-connector-agent
+Restart=always
+RestartSec=5
+Environment=PHARMA_AGENT_CONFIG=/etc/pharma-connector-agent/config.json
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target

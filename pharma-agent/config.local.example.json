@@ -1,0 +1,9 @@
+{
+  "agentName": "Loja Centro",
+  "token": "TOKEN_GERADO_NO_WEB",
+  "agentId": "AGENT_ID_APOS_REGISTRO",
+  "apiUrl": "https://api.seudominio.com",
+  "websocketUrl": "wss://api.seudominio.com/api/agents/socket",
+  "syncIntervalSeconds": 15,
+  "logLevel": "info"
+}
