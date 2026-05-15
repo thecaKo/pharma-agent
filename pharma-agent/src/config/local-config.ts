@@ -28,6 +28,6 @@ export async function saveConfig(config: LocalConfig): Promise<void> {
   await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 }
 
-export function isRegistered(config: LocalConfig | null): config is LocalConfig & { agentId: string } {
-  return Boolean(config?.token && config.agentName && config.agentId);
+export function isRegistered(config: LocalConfig | null): config is LocalConfig & { token: string } {
+  return Boolean(config?.token && (config.apiUrl || process.env.PHARMA_API_URL));
 }

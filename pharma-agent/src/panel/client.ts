@@ -1,16 +1,25 @@
-import WebSocket from "ws";
+import { io, type Socket } from "socket.io-client";
 import { emitAgentEvent, postHeartbeat } from "../api/event-sink";
-import { extractWireCommand, wireToAgentCommand, type WireCommand } from "../api/neo-command-mapper";
+import { postCommandResult, neoCommandNameFromEvent } from "../api/command-result";
+import { pushProductSnapshotDelta } from "../sync/product-sync-delta";
+import { wireToAgentCommand, type WireCommand } from "../api/neo-command-mapper";
 import { getCachedImportConfig, refreshImportConfigFromApi } from "../api/remote-sync-config";
+import { getPrimaryServiceBaseUrl } from "../config/api-url";
 import { handleCommand } from "../commands";
-import { getPrimaryServiceBaseUrl, resolveServiceUrl } from "../config/api-url";
-import { AgentCommandResponse, LocalConfig } from "../types";
+import { AgentCommandResponse, LocalConfig, ProductSyncResult } from "../types";
 
-let socket: WebSocket | null = null;
+let socket: Socket | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
 let heartbeatTimer: NodeJS.Timeout | null = null;
-let pollTimer: NodeJS.Timeout | null = null;
-let commandPollCursor = "";
+
+const NEO_COMMANDS = [
+  "searchDatabases",
+  "testDatabase",
+  "loadSchema",
+  "loadColumns",
+  "syncNow",
+  "refreshConfig"
+] as const;
 
 function clearHeartbeat(): void {
   if (heartbeatTimer) {
@@ -19,146 +28,112 @@ function clearHeartbeat(): void {
   }
 }
 
-function clearPoll(): void {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-}
-
-function startHeartbeat(config: LocalConfig & { agentId: string }): void {
+function startHeartbeat(config: LocalConfig): void {
   clearHeartbeat();
+  void postHeartbeat(config);
   heartbeatTimer = setInterval(() => {
     void postHeartbeat(config);
   }, 30_000);
 }
 
-function startPoll(config: LocalConfig & { agentId: string }): void {
-  clearPoll();
-  pollTimer = setInterval(() => {
-    void pollRemoteCommands(config);
-  }, 15_000);
-}
-
-export function startCommandPolling(config: LocalConfig & { agentId: string }): void {
-  startPoll(config);
-}
-
-async function pollRemoteCommands(config: LocalConfig & { agentId: string }): Promise<void> {
-  if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
-    return;
-  }
-  const pathTemplate = process.env.PHARMA_AGENT_COMMAND_POLL_PATH?.trim() || "/v1/agents/me/commands";
-  const path = commandPollCursor
-    ? `${pathTemplate}?since=${encodeURIComponent(commandPollCursor)}`
-    : pathTemplate;
-  let url: string;
-  try {
-    url = resolveServiceUrl(path, config);
-  } catch {
-    return;
-  }
-  try {
-    const res = await fetch(url, {
-      headers: {
-        "x-agent-id": config.agentId,
-        "x-agent-token": config.token
-      }
-    });
-    if (!res.ok) {
-      return;
-    }
-    const data = (await res.json()) as { commands?: unknown[]; cursor?: string } | unknown[];
-    const list = Array.isArray(data) ? data : data.commands ?? [];
-    if (!Array.isArray(list)) {
-      return;
-    }
-    for (const item of list) {
-      const wire = extractWireCommand(item) ?? extractWireCommand({ type: "command", payload: item });
-      if (!wire) {
-        continue;
-      }
-      const response = await dispatchWireCommand(wire, config);
-      sendCommandResponse(response);
-    }
-    if (!Array.isArray(data) && typeof data === "object" && data && typeof (data as { cursor?: unknown }).cursor === "string") {
-      commandPollCursor = (data as { cursor: string }).cursor;
-    }
-  } catch {
-    /* ignore */
+export function startCommandPolling(_config: LocalConfig): void {
+  if (process.env.PHARMA_AGENT_POLL_COMMANDS === "true") {
+    console.warn("PHARMA_AGENT_POLL_COMMANDS nao implementado para NEO-API; use Socket.IO.");
   }
 }
 
-export function connectToPanel(config: LocalConfig & { agentId: string }): void {
-  if (socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) {
+export function connectToPanel(config: LocalConfig): void {
+  if (socket?.connected) {
     return;
   }
 
-  let websocketUrl: string;
+  if (socket) {
+    socket.removeAllListeners();
+    socket.close();
+    socket = null;
+  }
+
+  let root: string;
   try {
-    websocketUrl = resolveWebsocketUrl(config);
+    root = getPrimaryServiceBaseUrl(config).replace(/\/+$/, "");
   } catch (error) {
     console.error(error instanceof Error ? error.message : error);
     scheduleReconnect(config);
-    startPoll(config);
     return;
   }
 
-  socket = new WebSocket(websocketUrl, {
-    headers: {
-      "x-agent-id": config.agentId,
-      "x-agent-token": config.token
-    }
+  const path = process.env.PHARMA_AGENT_SOCKET_PATH?.trim() || "/socket.io";
+  const url = `${root}/pharma-connector`;
+
+  socket = io(url, {
+    path,
+    auth: { token: config.token },
+    transports: ["websocket", "polling"]
   });
 
-  socket.on("open", () => {
-    clearPoll();
-    console.log(`Conectado via WebSocket: ${websocketUrl}`);
+  socket.on("connect", () => {
+    console.log(`Socket.io conectado: ${url}`);
     void emitAgentEvent(config, "agent.connected", {});
     startHeartbeat(config);
     void refreshImportConfigFromApi(config);
-    send({
-      type: "agent:hello",
-      payload: {
-        agentId: config.agentId,
-        agentName: config.agentName
-      }
-    });
+    registerNeoCommandHandlers(config, socket!);
   });
 
-  socket.on("message", async (raw) => {
-    const wire = parseIncomingToWire(raw.toString());
-    if (!wire) {
-      return;
-    }
-    const response = await dispatchWireCommand(wire, config);
-    sendCommandResponse(response);
-  });
-
-  socket.on("close", () => {
-    console.log("WebSocket desconectado.");
+  socket.on("disconnect", () => {
+    console.log("Socket.io desconectado.");
     void emitAgentEvent(config, "agent.disconnected", {});
     clearHeartbeat();
     scheduleReconnect(config);
-    startPoll(config);
   });
 
-  socket.on("error", (error) => {
-    console.error(`Erro no WebSocket: ${error.message}`);
+  socket.on("connect_error", (error) => {
+    console.error(`Socket.io erro: ${error.message}`);
   });
 }
 
-function parseIncomingToWire(raw: string): WireCommand | null {
-  try {
-    const message = JSON.parse(raw) as unknown;
-    return extractWireCommand(message);
-  } catch {
-    console.warn(`Mensagem WebSocket invalida: ${raw}`);
-    return null;
+function registerNeoCommandHandlers(config: LocalConfig, s: Socket): void {
+  for (const name of NEO_COMMANDS) {
+    const ev = `command.${name}`;
+    s.off(ev);
+    s.on(ev, (payload: unknown) => {
+      void handleNeoSocketCommand(config, ev, payload);
+    });
   }
 }
 
-async function dispatchWireCommand(wire: WireCommand, config: LocalConfig & { agentId: string }): Promise<AgentCommandResponse> {
+async function handleNeoSocketCommand(
+  config: LocalConfig,
+  eventName: string,
+  payload: unknown
+): Promise<void> {
+  const cmd = neoCommandNameFromEvent(eventName);
+  if (!cmd) {
+    return;
+  }
+  const envelope = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+  const commandPayload =
+    envelope.payload && typeof envelope.payload === "object" ? envelope.payload : envelope;
+  const id =
+    typeof envelope.commandId === "string"
+      ? envelope.commandId
+      : typeof (commandPayload as Record<string, unknown>).commandId === "string"
+        ? ((commandPayload as Record<string, unknown>).commandId as string)
+        : `neo-${cmd}-${Date.now()}`;
+  const wire: WireCommand = { id, type: eventName, payload: commandPayload ?? {} };
+  if (cmd === "syncNow") {
+    await emitAgentEvent(config, "sync.started", { commandId: id });
+  }
+  const response = await dispatchWireCommand(wire, config);
+  if (response.success && cmd === "syncNow" && response.data && typeof response.data === "object") {
+    const data = response.data as ProductSyncResult;
+    if (data.products?.length) {
+      await pushProductSnapshotDelta(config, data.products);
+    }
+  }
+  await postCommandResult(config, cmd, response);
+}
+
+async function dispatchWireCommand(wire: WireCommand, config: LocalConfig): Promise<AgentCommandResponse> {
   console.log(`Comando recebido: ${wire.type} (${wire.id})`);
 
   if (wire.type === "command.refreshConfig") {
@@ -166,8 +141,11 @@ async function dispatchWireCommand(wire: WireCommand, config: LocalConfig & { ag
     return { commandId: wire.id, success: true, data: { refreshed: true } };
   }
 
-  if (wire.type === "command.syncNow" && !getCachedImportConfig()) {
-    return { commandId: wire.id, success: false, error: "Sem configuracao de sync remota" };
+  if (wire.type === "command.syncNow") {
+    await refreshImportConfigFromApi(config);
+    if (!getCachedImportConfig()) {
+      return { commandId: wire.id, success: false, error: "Sem configuracao de sync (config/mapping incompleto na API)." };
+    }
   }
 
   const mapped = wireToAgentCommand(wire, getCachedImportConfig);
@@ -178,55 +156,17 @@ async function dispatchWireCommand(wire: WireCommand, config: LocalConfig & { ag
   return handleCommand(mapped);
 }
 
-function sendCommandResponse(response: AgentCommandResponse): void {
-  send({
-    type: "command:response",
-    payload: response
-  });
-}
-
-function send(message: unknown): void {
-  if (socket?.readyState !== WebSocket.OPEN) {
-    return;
-  }
-  socket.send(JSON.stringify(message));
-}
-
-function scheduleReconnect(config: LocalConfig & { agentId: string }): void {
+function scheduleReconnect(config: LocalConfig): void {
   if (reconnectTimer) {
     return;
   }
-
-  socket = null;
+  if (socket) {
+    socket.removeAllListeners();
+    socket.close();
+    socket = null;
+  }
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
     connectToPanel(config);
   }, 5000);
-}
-
-function resolveWebsocketUrl(config: LocalConfig): string {
-  if (config.websocketUrl) {
-    return addAuthQuery(config.websocketUrl, config);
-  }
-
-  const base = getPrimaryServiceBaseUrl(config);
-  if (!base) {
-    throw new Error("Defina PHARMA_API_URL ou apiUrl no config (ou PHARMA_PANEL_URL legado).");
-  }
-
-  const wsPath = process.env.PHARMA_AGENT_WS_PATH?.trim() || "/api/agents/socket";
-  const panelUrl = new URL(base);
-  panelUrl.protocol = panelUrl.protocol === "https:" ? "wss:" : "ws:";
-  panelUrl.pathname = wsPath.startsWith("/") ? wsPath : `/${wsPath}`;
-  return addAuthQuery(panelUrl.toString(), config);
-}
-
-function addAuthQuery(value: string, config: LocalConfig): string {
-  const base = getPrimaryServiceBaseUrl(config);
-  const url = new URL(value, base ? `${base}/` : undefined);
-  if (config.agentId) {
-    url.searchParams.set("agentId", config.agentId);
-  }
-  url.searchParams.set("token", config.token);
-  return url.toString();
 }

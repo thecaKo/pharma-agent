@@ -15,6 +15,7 @@ export type ProductMapping = {
   nameField: string;
   priceField?: string;
   stockField?: string;
+  barcodeField?: string;
   imageField?: string;
 };
 
@@ -28,6 +29,7 @@ export type NormalizedProduct = {
   name: string;
   price?: number;
   stock?: number;
+  barcode?: string;
   image?: string;
 };
 
@@ -117,7 +119,7 @@ export type RegisterAgentResponse = {
 
 export type LocalConfig = {
   token: string;
-  agentName: string;
+  agentName?: string;
   agentId?: string;
   websocketUrl?: string;
   apiUrl?: string;

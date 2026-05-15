@@ -47,14 +47,8 @@ if [[ -n "$API_URL" ]]; then
     fs.writeFileSync(path, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
   ' "$CFG" "$TOKEN" "$API_URL"
 else
-  node -e '
-    const fs = require("fs");
-    const path = process.argv[1];
-    const token = process.argv[2];
-    const prev = fs.existsSync(path) ? JSON.parse(fs.readFileSync(path, "utf8")) : {};
-    const next = { ...prev, token };
-    fs.writeFileSync(path, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
-  ' "$CFG" "$TOKEN"
+  echo "--api-url e obrigatorio para instalar o agente em modo servico." >&2
+  exit 1
 fi
 
 chmod 600 "$CFG" 2>/dev/null || true

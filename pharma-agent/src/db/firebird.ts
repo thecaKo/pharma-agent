@@ -172,19 +172,41 @@ async function runIsql(config: DbConfig, sql: string): Promise<string> {
   await fs.writeFile(inputFile, `${sql.trim()}\nQUIT;\n`, "utf8");
 
   try {
-    return await execIsql(binary, [
-      resolveIsqlDatabase(config),
-      "-user",
-      config.user,
-      "-password",
-      config.password,
-      "-q",
-      "-i",
-      inputFile
-    ]);
+    const args = buildIsqlArgs(config, inputFile, true);
+    try {
+      return await execIsql(binary, args);
+    } catch (error) {
+      if (isLocalFirebirdFile(config) && hasCredentials(config) && isLoginError(error)) {
+        return await execIsql(binary, buildIsqlArgs(config, inputFile, false));
+      }
+      throw error;
+    }
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+function buildIsqlArgs(config: DbConfig, inputFile: string, includeCredentials: boolean): string[] {
+  const args = [resolveIsqlDatabase(config), "-q", "-i", inputFile];
+  if (!includeCredentials) {
+    return args;
+  }
+  if (config.user?.trim()) {
+    args.splice(1, 0, "-user", config.user.trim());
+  }
+  if (config.password?.trim()) {
+    args.splice(config.user?.trim() ? 3 : 1, 0, "-password", config.password);
+  }
+  return args;
+}
+
+function hasCredentials(config: DbConfig): boolean {
+  return Boolean(config.user?.trim() || config.password?.trim());
+}
+
+function isLoginError(error: unknown): boolean {
+  const message = formatError(error).toLowerCase();
+  return message.includes("login") || message.includes("password") || message.includes("user");
 }
 
 function execIsql(binary: string, args: string[]): Promise<string> {
@@ -209,10 +231,24 @@ function execIsql(binary: string, args: string[]): Promise<string> {
 }
 
 function resolveIsqlDatabase(config: DbConfig): string {
-  if (isLocalHost(config.host) && path.isAbsolute(config.database) && existsSync(config.database)) {
+  if (shouldOpenLocalFile(config)) {
     return config.database;
   }
-  return `${config.host}/${config.port}:${config.database}`;
+  return `${normalizeFirebirdHost(config.host)}/${config.port}:${config.database}`;
+}
+
+function shouldOpenLocalFile(config: DbConfig): boolean {
+  return (
+    process.env.PHARMA_FIREBIRD_CONNECTION_MODE === "embedded" &&
+    isLocalHost(config.host) &&
+    path.isAbsolute(config.database) &&
+    existsSync(config.database)
+  );
+}
+
+function normalizeFirebirdHost(host: string): string {
+  const value = host.trim();
+  return value || "127.0.0.1";
 }
 
 function resolveIsqlBinary(): string | null {

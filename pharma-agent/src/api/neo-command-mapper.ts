@@ -39,12 +39,57 @@ export function extractWireCommand(message: unknown): WireCommand | null {
   return null;
 }
 
-function asDbConfig(payload: unknown): DbConfig {
-  return payload as DbConfig;
-}
-
 function asSearchPayload(payload: unknown): DatabaseFileSearchPayload | undefined {
   return (payload ?? undefined) as DatabaseFileSearchPayload | undefined;
+}
+
+function numberOrDefault(value: unknown, fallback: number): number {
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+function firstFilled(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return "";
+}
+
+function dbConfigFromPanelPayload(payload: Record<string, unknown>): DbConfig | null {
+  const driver = typeof payload.driver === "string" ? payload.driver : "firebird";
+  const rawMode =
+    typeof payload.connectionMode === "string"
+      ? payload.connectionMode
+      : typeof payload.connection_mode === "string"
+        ? payload.connection_mode
+        : "";
+  const mode = rawMode.trim().toLowerCase();
+  const useName = mode === "name" || mode === "database";
+  let database = "";
+  if (useName) {
+    database = firstFilled(payload.databaseName, payload.database_name, payload.database);
+  } else {
+    database = firstFilled(
+      payload.database,
+      payload.databasePath,
+      payload.database_path,
+      payload.databaseName,
+      payload.database_name
+    );
+  }
+  if (!database) {
+    return null;
+  }
+  return {
+    driver: driver as DbConfig["driver"],
+    host: typeof payload.host === "string" && payload.host.trim() ? payload.host : "localhost",
+    port: numberOrDefault(payload.port, driver === "firebird" || driver === "interbase" ? 3050 : 0),
+    database,
+    user: typeof payload.username === "string" ? payload.username : typeof payload.user === "string" ? payload.user : "",
+    password: typeof payload.password === "string" ? payload.password : ""
+  };
 }
 
 export function wireToAgentCommand(wire: WireCommand, getImport: () => ImportConfig | null): AgentCommand | null {
@@ -58,10 +103,53 @@ export function wireToAgentCommand(wire: WireCommand, getImport: () => ImportCon
         type: "database:deep-scan",
         payload: asSearchPayload(wire.payload) ?? {}
       };
-    case "command.testDatabase":
-      return { id: wire.id, type: "db:test", payload: asDbConfig(wire.payload) };
-    case "command.loadColumns":
-      return { id: wire.id, type: "db:columns", payload: asDbConfig(wire.payload) as DbConfig & { table: string } };
+    case "command.testDatabase": {
+      const asPayload = wire.payload as Record<string, unknown> | null;
+      const looksLikeDb =
+        asPayload && typeof asPayload === "object" && "driver" in asPayload && "database" in asPayload;
+      if (looksLikeDb) {
+        return { id: wire.id, type: "db:test", payload: asPayload as DbConfig };
+      }
+      if (asPayload && typeof asPayload === "object") {
+        const db = dbConfigFromPanelPayload(asPayload);
+        if (db) {
+          return { id: wire.id, type: "db:test", payload: db };
+        }
+      }
+      const ic = getImport();
+      return ic ? { id: wire.id, type: "db:test", payload: ic.db } : null;
+    }
+    case "command.loadSchema": {
+      const asPayload = wire.payload as Record<string, unknown> | null;
+      if (asPayload && typeof asPayload === "object") {
+        const db = dbConfigFromPanelPayload(asPayload);
+        if (db) {
+          return { id: wire.id, type: "db:schema", payload: db };
+        }
+      }
+      const ic = getImport();
+      return ic ? { id: wire.id, type: "db:schema", payload: ic.db } : null;
+    }
+    case "command.loadColumns": {
+      const asPayload = wire.payload as Record<string, unknown> | null;
+      const looksLikeDb =
+        asPayload && typeof asPayload === "object" && "driver" in asPayload && "table" in asPayload;
+      if (looksLikeDb) {
+        return {
+          id: wire.id,
+          type: "db:columns",
+          payload: asPayload as DbConfig & { table: string }
+        };
+      }
+      const ic = getImport();
+      const tableName =
+        asPayload && typeof asPayload.tableName === "string" && asPayload.tableName.trim()
+          ? asPayload.tableName.trim()
+          : undefined;
+      return ic
+        ? { id: wire.id, type: "db:columns", payload: { ...ic.db, table: tableName ?? ic.mapping.table } }
+        : null;
+    }
     case "command.syncNow": {
       const ic = getImport();
       if (!ic) {

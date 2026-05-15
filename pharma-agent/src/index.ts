@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { emitAgentEvent } from "./api/event-sink";
+import { pushProductSnapshotDelta } from "./sync/product-sync-delta";
 import { getCachedImportConfig, refreshImportConfigFromApi } from "./api/remote-sync-config";
 import { handleCommand } from "./commands";
 import { applyEnvToConfig } from "./config/env-merge";
@@ -39,17 +40,25 @@ async function main(): Promise<void> {
     return;
   }
 
-  console.log("Agente ainda nao registrado. Abra o setup local para configurar token e painel.");
+  console.log("Agente sem token/API. Configure PHARMA_API_URL e PHARMA_AGENT_TOKEN.");
 }
 
 async function runScheduledSync(config: Parameters<typeof emitAgentEvent>[0]): Promise<void> {
+  await refreshImportConfigFromApi(config);
   const ic = getCachedImportConfig();
   if (!ic) {
     return;
   }
   const id = `auto-sync-${Date.now()}`;
   try {
+    await emitAgentEvent(config, "sync.started", { commandId: id });
     const r = await handleCommand({ id, type: "products:sync", payload: ic });
+    if (r.success && r.data && typeof r.data === "object" && "products" in r.data) {
+      const products = (r.data as { products?: import("./types").NormalizedProduct[] }).products;
+      if (products?.length) {
+        await pushProductSnapshotDelta(config, products);
+      }
+    }
     await emitAgentEvent(config, r.success ? "sync.finished" : "sync.failed", {
       commandId: id,
       error: r.error
