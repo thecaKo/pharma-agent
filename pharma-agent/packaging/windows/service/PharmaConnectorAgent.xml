@@ -1,0 +1,16 @@
+<service>
+  <id>PharmaConnectorAgent</id>
+  <name>PharmaConnector Agent</name>
+  <description>Agente local PharmaConnector para sincronizacao com o painel.</description>
+  <executable>node.exe</executable>
+  <arguments>"dist\index.js"</arguments>
+  <workingdirectory>%BASE%</workingdirectory>
+  <env name="PHARMA_AGENT_CONFIG" value="%BASE%\config.local.json" />
+  <env name="PHARMA_AGENT_ENV_FILE" value="%BASE%\.env" />
+  <env name="PHARMA_AGENT_SETUP_HOST" value="127.0.0.1" />
+  <env name="PHARMA_AGENT_SETUP_PORT" value="3333" />
+  <env name="NODE_ENV" value="production" />
+  <logpath>%BASE%\logs</logpath>
+  <log mode="roll"></log>
+  <onfailure action="restart" delay="5 sec" />
+</service>

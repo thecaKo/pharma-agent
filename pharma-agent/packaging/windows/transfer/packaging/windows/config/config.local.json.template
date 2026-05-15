@@ -1,0 +1,7 @@
+{
+  "token": "SEU_TOKEN",
+  "agentName": "PharmaConnector Agent",
+  "apiUrl": "https://painel.exemplo.com",
+  "syncIntervalSeconds": 15,
+  "logLevel": "info"
+}

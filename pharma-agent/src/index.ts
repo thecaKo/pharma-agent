@@ -4,11 +4,10 @@ import { pushProductSnapshotDelta } from "./sync/product-sync-delta";
 import { getCachedImportConfig, refreshImportConfigFromApi } from "./api/remote-sync-config";
 import { handleCommand } from "./commands";
 import { applyEnvToConfig } from "./config/env-merge";
+import { loadRuntimeEnv } from "./config/env-file";
 import { isRegistered, loadConfig } from "./config/local-config";
 import { connectToPanel, startCommandPolling } from "./panel/client";
 import { startSetupServer } from "./setup/server";
-
-configureFirebirdLock();
 
 process.on("uncaughtException", (error) => {
   console.error("Erro nao tratado no agente:", error);
@@ -18,14 +17,16 @@ process.on("unhandledRejection", (error) => {
   console.error("Promise rejeitada sem tratamento no agente:", error);
 });
 
-const SETUP_PORT = Number(process.env.PHARMA_AGENT_SETUP_PORT ?? 3333);
-const SETUP_HOST = process.env.PHARMA_AGENT_SETUP_HOST ?? "127.0.0.1";
-
 async function main(): Promise<void> {
+  await loadRuntimeEnv();
+  configureFirebirdLock();
+
   const raw = await loadConfig();
   const config = applyEnvToConfig(raw);
+  const setupPort = Number(process.env.PHARMA_AGENT_SETUP_PORT ?? 3333);
+  const setupHost = process.env.PHARMA_AGENT_SETUP_HOST ?? "127.0.0.1";
 
-  startSetupServer({ port: SETUP_PORT, host: SETUP_HOST });
+  startSetupServer({ port: setupPort, host: setupHost });
 
   if (isRegistered(config)) {
     await emitAgentEvent(config, "agent.started", {});

@@ -5,9 +5,16 @@ import { LocalConfig } from "../types";
 const DEFAULT_CONFIG_FILE = "config.local.json";
 
 export function getConfigPath(): string {
-  return process.env.PHARMA_AGENT_CONFIG
-    ? path.resolve(process.env.PHARMA_AGENT_CONFIG)
-    : path.resolve(process.cwd(), DEFAULT_CONFIG_FILE);
+  if (process.env.PHARMA_AGENT_CONFIG) {
+    return path.resolve(process.env.PHARMA_AGENT_CONFIG);
+  }
+
+  if (process.platform === "win32") {
+    const programData = process.env.ProgramData ?? "C:\\ProgramData";
+    return path.resolve(programData, "PharmaConnectorAgent", DEFAULT_CONFIG_FILE);
+  }
+
+  return path.resolve(process.cwd(), DEFAULT_CONFIG_FILE);
 }
 
 export async function loadConfig(): Promise<LocalConfig | null> {

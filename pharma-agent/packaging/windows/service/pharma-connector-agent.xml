@@ -1,0 +1,16 @@
+<service>
+  <id>__SERVICE_ID__</id>
+  <name>__SERVICE_NAME__</name>
+  <description>Agente local PharmaConnector para sincronizacao com o painel.</description>
+  <executable>__NODE_EXE__</executable>
+  <arguments>"__AGENT_MAIN__"</arguments>
+  <workingdirectory>__INSTALL_ROOT__</workingdirectory>
+  <env name="PHARMA_AGENT_CONFIG" value="__CONFIG_PATH__" />
+  <env name="PHARMA_AGENT_ENV_FILE" value="__ENV_FILE__" />
+  <env name="PHARMA_AGENT_SETUP_HOST" value="__SETUP_HOST__" />
+  <env name="PHARMA_AGENT_SETUP_PORT" value="__SETUP_PORT__" />
+  <env name="NODE_ENV" value="production" />
+  <logpath>__INSTALL_ROOT__\logs</logpath>
+  <log mode="roll"></log>
+  <onfailure action="restart" delay="5 sec" />
+</service>

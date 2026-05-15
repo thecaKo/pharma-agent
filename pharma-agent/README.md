@@ -39,3 +39,25 @@ O agente salva a configuracao em `config.local.json`, registra no painel e abre 
 - `products:import`
 
 MySQL usa `mysql2/promise`. Firebird usa `node-firebird`.
+
+## Windows
+
+Existe uma base de instalacao em `packaging/windows/` seguindo este padrao:
+
+- Instalador visual: Inno Setup
+- Servico Windows: WinSW
+- Backend: Node.js
+- Configuracao: JSON e `.env`
+- Interface do instalador: wizard customizado
+
+Para montar o stage do pacote Windows:
+
+```bash
+npm run prepare:windows
+```
+
+Depois de copiar a pasta gerada para um PC com Windows, execute:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging/windows/windows-build.ps1
+```
